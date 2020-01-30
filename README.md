@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.com/atlix/aws_cf_samples.svg?branch=master)](https://travis-ci.com/atlix/aws_cf_samples)
+
 # Getting Started
 This is sample repository that can help you to launch some services and infrastructure in AWS services.
 
