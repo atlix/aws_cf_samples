@@ -1,6 +1,5 @@
 #!/bin/bash
 ERROR_COUNT=0; 
-AWS_DEFAULT_REGION=eu-west-1;
 
 echo "Validating AWS CloudFormation templates..."
 
