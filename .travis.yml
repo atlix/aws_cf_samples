@@ -1,14 +1,11 @@
 os:
 - linux
 
-stages:
-- name: tests
+install:
+  - pip install --user awscli
 
-jobs:
-  include:
-  - stage: tests
-    script:
-    - ./tests/validate-templates.sh
+script:
+  - ./tests/validate-templates.sh
 
 notifications:
   email: false
