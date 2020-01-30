@@ -1,0 +1,85 @@
+Parameters:
+  EnvironmentName:
+    Type: String
+    Description: Environment name that joins all the stacks
+
+  LoadBalancerName:
+    Type: String
+    Default: sample-external-lb
+    Description: Name of the public load balancer
+
+  CertificateArn:
+    Type: String
+
+Resources:
+
+  PublicLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId:
+        'Fn::ImportValue': !Sub "${EnvironmentName}:VPC"
+      SecurityGroupIngress:
+          - CidrIp: 0.0.0.0/0
+            IpProtocol: -1
+
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref LoadBalancerName
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '30'
+      Subnets:
+        - { 'Fn::ImportValue': !Sub "${EnvironmentName}:PublicSubnet1" }  
+        - { 'Fn::ImportValue': !Sub "${EnvironmentName}:PublicSubnet2" }  
+        - { 'Fn::ImportValue': !Sub "${EnvironmentName}:PublicSubnet3" }
+      SecurityGroups: [!Ref 'PublicLoadBalancerSG']
+
+  PublicLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - PublicLoadBalancer
+    Properties:
+      LoadBalancerArn: !Ref 'PublicLoadBalancer'
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Host: "#{host}"
+            Path: "/#{path}"
+            Port: "443"
+            Protocol: "HTTPS"
+            Query: "#{query}"
+            StatusCode: "HTTP_301"
+
+  PublicLoadBalancerTLSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+      - PublicLoadBalancer
+    Properties:
+      LoadBalancerArn: !Ref 'PublicLoadBalancer'
+      SslPolicy: "ELBSecurityPolicy-TLS-1-2-Ext-2018-06"
+      Certificates:
+      - CertificateArn: !Ref CertificateArn
+      Port: 443
+      Protocol: HTTPS
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: "text/plain"
+            MessageBody: "sample default ALB. It seems, you are using wrong url."
+            StatusCode: "503"
+
+Outputs: 
+
+  LoadBalancerDefaultEndpoint:
+    Value: !Join ['', ['http://', !GetAtt 'PublicLoadBalancer.DNSName']]
+
+  PublicLoadBalancer:
+    Description: A reference to the Application Load Balancer/ARN
+    Value: !Ref PublicLoadBalancerTLSListener
+    Export: 
+      Name: !Sub "${EnvironmentName}:PublicLoadBalancerListenerArn"

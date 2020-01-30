@@ -1,0 +1,1 @@
+APP_SUBNETS="${ENVIRONMENT_NAME}:PrivateSubnetMain1,${ENVIRONMENT_NAME}:PrivateSubnetMain2,${ENVIRONMENT_NAME}:PrivateSubnetMain3"

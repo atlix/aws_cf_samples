@@ -1,0 +1,132 @@
+---
+Parameters:
+  EnvironmentName:
+    Type: String
+    Description: Environment name that joins all the stacks
+  
+  AppName:
+    Type: String
+    Description: App name
+
+  AppImage:
+    Type: String
+    Description: App docker image url
+
+  AppSubnets:
+    Type: CommaDelimitedList
+    Description: App subnet list
+
+  AppTaskRoleArn:
+    Type: String
+    Description: App task role ARN
+    Default: "arn:aws:iam::XXXXXXX:role/TaskExecutionRole"
+
+  AppLogsGroup:
+    Type: String
+    Description: CloudWatch logs group
+    Default: '!Sub "/ecs/${ENVIRONMENT_NAME}-${APP_NAME}-cron"'
+  
+  AppLogGroupRetentionInDays:
+    Type: Number
+    Default: 30
+
+  EventsRoleArn:
+    Type: String
+    Description: Ecs events role ARN
+    Default: "arn:aws:iam::XXXXXXX:role/EventsRole"
+    
+  CronName1:
+    Type: String
+    Description: First cron name
+    Default: "cron"
+
+Conditions:
+  EnvIsStg: !Equals [!Ref EnvironmentName, "sample-stage"]
+  EnvIsProd: !Equals [!Ref EnvironmentName, "sample-prod"]
+
+Resources:
+
+  AppServiceLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref AppLogsGroup
+      RetentionInDays:
+        Ref: AppLogGroupRetentionInDays
+
+  AppServiceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties: 
+      GroupName: !Sub "${EnvironmentName}-${AppName}-cron"
+      GroupDescription: "Security group for the service"
+      VpcId:
+        'Fn::ImportValue': !Sub "${EnvironmentName}:VPC"
+      SecurityGroupIngress:
+        - CidrIp:
+            'Fn::ImportValue': !Sub "${EnvironmentName}:VpcCIDR1"
+          IpProtocol: -1
+        - CidrIp:
+            'Fn::ImportValue': !Sub "${EnvironmentName}:VpcCIDR2"
+          IpProtocol: -1
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+
+  TaskDef1:
+    Type: AWS::ECS::TaskDefinition
+    Properties: 
+      Cpu: "256"
+      ExecutionRoleArn: 
+        'Fn::ImportValue': !Sub "${EnvironmentName}-${AppName}:TaskExecutionIamRoleArn"
+      Family: !Sub '${EnvironmentName}-${AppName}-${CronName1}'
+      Memory: "512"
+      NetworkMode: "awsvpc"
+      TaskRoleArn: !Ref AppTaskRoleArn
+      ContainerDefinitions: 
+        - Name: !Ref AppName
+          Image: !Ref AppImage
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: "eu-west-1"
+              awslogs-group: !Ref AppLogsGroup
+              awslogs-stream-prefix: ecs
+          Essential: true
+          Environment: 
+            - Name: "SAMPLE_ENV"
+              Value: "sample_value"
+          Secrets: !If
+            - EnvIsStg
+            -
+            # Stg env
+              - Name: "SAMPLE_SECRET"
+                ValueFrom: "/sample/stage/sample-app/SAMPLE_SECRET"
+            # Prod env
+            -
+              - Name: "SAMPLE_SECRET"
+                ValueFrom: "/sample/prod/sample-app/SAMPLE_SECRET"
+ 
+  AppCron1:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${EnvironmentName}-${AppName}-${CronName1}'
+      Description: !Sub '${EnvironmentName}-${AppName}-${CronName1}'
+      ScheduleExpression: cron(0 0 1 * ? *)
+      State: ENABLED
+      Targets:
+      - Id: !Sub '${AppName}-${CronName1}'
+        RoleArn: !Ref EventsRoleArn
+        EcsParameters:
+          TaskDefinitionArn: { Ref: TaskDef1 }
+          TaskCount: 1
+          LaunchType: 'EC2'
+          NetworkConfiguration:
+            AwsVpcConfiguration:
+              AssignPublicIp: DISABLED
+              SecurityGroups:
+                - !Ref AppServiceSecurityGroup
+              Subnets:
+                - 'Fn::ImportValue': !Select [0, !Ref AppSubnets]
+                - 'Fn::ImportValue': !Select [1, !Ref AppSubnets]
+                - 'Fn::ImportValue': !Select [2, !Ref AppSubnets]
+        Arn:
+          'Fn::ImportValue': !Sub "${EnvironmentName}:ECSClusterArn"

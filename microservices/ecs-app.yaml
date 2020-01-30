@@ -1,0 +1,197 @@
+---
+Parameters:
+  EnvironmentName:
+    Type: String
+    Description: Environment name that joins all the stacks
+
+  ECSServicesDomain:
+    Type: String
+    Description: DNS namespace used by services e.g. default.svc.cluster.local
+
+  AppTaskDefinition:
+    Type: String
+    Description: Task definition for App
+  
+  AppName:
+    Type: String
+    Description: App name
+
+  AppSubnets:
+    Type: CommaDelimitedList
+    Description: App subnet list
+    Default: '"${EnvironmentName}:PrivateSubnetMain1","${EnvironmentName}:PrivateSubnetMain2","${EnvironmentName}:PrivateSubnetMain3"'
+    
+  AppPort:
+    Type: Number
+    Default: 8080
+    Description: App port for LB target group
+    
+  AppHealthcheckPort:
+    Type: Number
+    Default: 8081
+    Description: App port for LB target group
+
+  AppLogsGroup:
+    Type: String
+    Description: CloudWatch logs group
+  
+  AppLogGroupRetentionInDays:
+    Type: Number
+    Default: 30
+
+  LoadBalancer:
+    Type: String
+    Default: false
+    AllowedValues:
+      - true
+      - false
+    Description: Set to "true" when your service have LoadBalancer
+    
+  LoadBalancerRulePriority:
+    Type: Number
+    Default: 999
+
+  ServiceDiscoveryName:
+    Type: String
+    Description: Application service discovery name
+
+  AppHostname:
+    Type: String
+    Description: Application hostname for ALB rules
+    Default: sample.online
+
+Conditions:
+  WithLB: !Equals [true, !Ref LoadBalancer]
+  WithoutLB: !Equals [false, !Ref LoadBalancer]
+
+Resources:
+
+  AppServiceLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Ref AppLogsGroup
+      RetentionInDays:
+        Ref: AppLogGroupRetentionInDays
+
+  AppServiceDiscoveryRecord:
+    Type: 'AWS::ServiceDiscovery::Service'
+    Properties:
+      Name: !Ref ServiceDiscoveryName
+      DnsConfig:
+        NamespaceId:
+          'Fn::ImportValue': !Sub "${EnvironmentName}:ECSServiceDiscoveryNamespace"
+        DnsRecords:
+          - Type: A
+            TTL: 300
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  AppServiceSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties: 
+      GroupName: !Sub "${EnvironmentName}-${AppName}"
+      GroupDescription: "Security group for the service"
+      VpcId:
+        'Fn::ImportValue': !Sub "${EnvironmentName}:VPC"
+      SecurityGroupIngress:
+        - CidrIp:
+            'Fn::ImportValue': !Sub "${EnvironmentName}:VpcCIDR1"
+          IpProtocol: -1
+        - CidrIp:
+            'Fn::ImportValue': !Sub "${EnvironmentName}:VpcCIDR2"
+          IpProtocol: -1
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: -1
+
+  AppService:
+    Type: 'AWS::ECS::Service'
+    Condition: WithoutLB
+    Properties:
+      ServiceName: !Ref AppName
+      Cluster:
+        'Fn::ImportValue': !Sub "${EnvironmentName}:ECSCluster"
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: 1
+      LaunchType: FARGATE
+      ServiceRegistries:
+        - RegistryArn:
+            'Fn::GetAtt': AppServiceDiscoveryRecord.Arn
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref AppServiceSecurityGroup
+          Subnets: 
+            - 'Fn::ImportValue': !Sub "${EnvironmentName}:PrivateSubnetMain1"
+            - 'Fn::ImportValue': !Sub "${EnvironmentName}:PrivateSubnetMain2"
+            - 'Fn::ImportValue': !Sub "${EnvironmentName}:PrivateSubnetMain3"
+      TaskDefinition: { Ref: AppTaskDefinition }
+
+  AppServiceWithLB:
+    Type: 'AWS::ECS::Service'
+    Condition: WithLB
+    Properties:
+      ServiceName: !Ref AppName
+      Cluster:
+        'Fn::ImportValue': !Sub "${EnvironmentName}:ECSCluster"
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: 1
+      LaunchType: FARGATE
+      ServiceRegistries:
+        - RegistryArn:
+            'Fn::GetAtt': AppServiceDiscoveryRecord.Arn
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref AppServiceSecurityGroup
+          Subnets:
+            - 'Fn::ImportValue': !Sub "${EnvironmentName}:PrivateSubnetMain1"
+            - 'Fn::ImportValue': !Sub "${EnvironmentName}:PrivateSubnetMain2"
+            - 'Fn::ImportValue': !Sub "${EnvironmentName}:PrivateSubnetMain3"
+      TaskDefinition: { Ref: AppTaskDefinition }
+      LoadBalancers:
+        - ContainerName: !Ref AppName
+          ContainerPort: !Ref AppPort
+          TargetGroupArn: !Ref AppTargetGroup
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: WithLB
+    Properties:
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPort: !Ref AppHealthcheckPort
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      TargetType: ip
+      Name: !Sub "${EnvironmentName}-${ServiceDiscoveryName}"
+      Port: !Ref AppPort
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 120
+      VpcId:
+        'Fn::ImportValue': !Sub "${EnvironmentName}:VPC"
+
+  AppLoadBalancerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: WithLB
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref AppTargetGroup
+          Type: 'forward'
+      Conditions:
+        - Field: host-header
+          Values: 
+            - !Ref AppHostname
+      ListenerArn: 
+        'Fn::ImportValue': !Sub "${EnvironmentName}:PublicLoadBalancerListenerArn"
+      Priority: !Ref LoadBalancerRulePriority

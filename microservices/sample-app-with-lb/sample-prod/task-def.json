@@ -1,0 +1,47 @@
+{
+    "family": $NAME,
+    "taskRoleArn": "arn:aws:iam::XXXXXXX:role/Role",
+    "executionRoleArn": $EXECUTION_ROLE_ARN,
+    "networkMode": "awsvpc",
+    "cpu": "256",
+    "memory": "512",
+        "containerDefinitions": [
+            {
+                "name": $APP_NAME,
+                "image": $APP_IMAGE,
+                "environment": [
+                    {
+                        "name": "SAMPLE_ENV",
+                        "value": "sample_value"
+                    }
+                ], 
+                "secrets": [
+                    {
+                        "valueFrom": "/sample/prod/sample_app/SAMPLE_SECRET",
+                        "name": "SAMPLE_SECRET"
+                    }
+                ], 
+                "portMappings": [
+                    {
+                        "protocol": "tcp", 
+                        "containerPort": 8080, 
+                        "hostPort": 8080
+                    }, 
+                    {
+                        "protocol": "tcp", 
+                        "containerPort": 8081, 
+                        "hostPort": 8081
+                    }
+                ], 
+                "logConfiguration": {
+                    "logDriver": "awslogs", 
+                    "options": {
+                        "awslogs-region": "eu-west-1", 
+                        "awslogs-stream-prefix": "ecs", 
+                        "awslogs-group": $AWSLOGS_GROUP
+                    }
+                }, 
+                "essential": true
+            }
+        ]
+}

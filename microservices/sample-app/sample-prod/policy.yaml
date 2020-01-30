@@ -1,0 +1,63 @@
+Description: >
+  This template update task execution role with custom policy.
+
+Parameters:
+
+  AppName:
+    Type: String
+    Description: App name
+
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  TaskExecutionRoleName:
+    Description: Please provide task execution role name
+    Type: String
+    Default: sample-ENV-APP-ecsTaskExecutionRole
+
+
+Resources:
+
+  CustomManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "${TaskExecutionRoleName}-custom-policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: AllowAllUsersToListAccounts
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - ssm:GetParameters
+              - ssm:GetParameter
+            Resource:
+              - arn:aws:kms:eu-west-1:XXXXXX:key/XXXXX
+              - arn:aws:ssm:eu-west-1:XXXXXX:parameter/sample/prod/sample_app/SAMPLE_SECRET
+
+  TaskExecutionIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref TaskExecutionRoleName
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "ecs-tasks.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - !Ref CustomManagedPolicy
+
+Outputs:
+
+    TaskExecutionIamRoleArn:
+      Description: Task Executin IAM role used by ECS tasks
+      Value: { "Fn::GetAtt": TaskExecutionIamRole.Arn }
+      Export:
+        Name: !Sub "${EnvironmentName}-${AppName}:TaskExecutionIamRoleArn"

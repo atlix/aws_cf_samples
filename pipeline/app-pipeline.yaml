@@ -1,0 +1,183 @@
+Description: >
+  This template creates task execution role for running application in ECS cluster.
+
+Parameters:
+
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  AppName:
+    Type: String
+    Description: App name
+
+Resources:
+
+  CodeBuild:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Name: !Ref AppName
+      Artifacts:
+        Packaging: ZIP
+        Name: artifact
+        NamespaceType: NONE
+        EncryptionDisabled: false
+        Location: sample-codebuild-artifacts
+        OverrideArtifactName: false
+        Path: !Join 
+          - ''
+          - - !Ref AppName
+        Type: S3
+      BadgeEnabled: false
+      Cache:
+        Type: LOCAL
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+      EncryptionKey:
+        Fn::Sub: arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/s3
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        ImagePullCredentialsType: CODEBUILD
+        PrivilegedMode: true
+        Image: 'aws/codebuild/standard:2.0'
+        EnvironmentVariables:
+          - Type: PLAINTEXT
+            Name: REPOSITORY_URI
+            Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}'
+        Type: LINUX_CONTAINER
+      LogsConfig:
+        S3Logs:
+          Status: DISABLED
+          EncryptionDisabled: false
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Sub "/codebuild/stg"
+          StreamName: !Ref AppName
+      ServiceRole:
+        'Fn::ImportValue': !Sub "${AppName}:CodeBuildRole"
+      Source:
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                docker: 18
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws --version
+                - $(aws ecr get-login --region $AWS_DEFAULT_REGION --no-include-email)
+                - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the Docker image...
+                - docker build -t $REPOSITORY_URI:$IMAGE_TAG .
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker images...
+                - docker push $REPOSITORY_URI:$IMAGE_TAG
+                - printf '[{"name":"${EnvironmentName}-${AppName}","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imageDetail.json
+          artifacts:
+            files:
+              - imageDetail.json
+        Location: !Join 
+          - ''
+          - - 'https://github.com/sample/'
+            - !Ref AppName
+            - .git
+        Type: GITHUB
+        ReportBuildStatus: true
+      Triggers:
+        FilterGroups:
+          - - Pattern: PUSH
+              Type: EVENT
+              ExcludeMatchedPattern: false
+            - Pattern: ^refs/heads/master$
+              Type: HEAD_REF
+              ExcludeMatchedPattern: false
+        Webhook: true
+    DependsOn:
+      - ECRRepository
+
+  ECRRepository:
+    Type: 'AWS::ECR::Repository'
+    Properties:
+      RepositoryName: !Ref AppName
+
+  CodePipeLine:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      Name: !Ref AppName
+      RoleArn:
+        'Fn::ImportValue': !Sub "${AppName}:CodePipelineRole"
+      Stages:
+        - Name: Source
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              Region: eu-west-1
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: S3
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                S3Bucket: sample-codebuild-artifacts
+                PollForSourceChanges: 'false'
+                S3ObjectKey: !Join 
+                  - ''
+                  - - !Ref AppName
+                    - /artifact
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - InputArtifacts:
+                - Name: SourceArtifact
+              Name: Deploy
+              Region: eu-west-1
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: ECS
+              OutputArtifacts: []
+              Configuration:
+                ClusterName:
+                  'Fn::ImportValue': !Sub "${EnvironmentName}:ECSCluster"
+                ServiceName: !Ref AppName
+                FileName: imageDetail.json
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        Location: codepipeline-region-XXXXXXXXX
+    DependsOn:
+      - CodeBuild
+
+  eventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: !Join 
+        - '-'
+        - - codepipeline
+          - !Ref AppName
+      EventPattern: !Sub >
+        {"source":["aws.s3"],"detail-type":["AWS API Call
+        via CloudTrail"],"detail":{"eventSource":["s3.amazonaws.com"],"eventName":["PutObject","CompleteMultipartUpload","CopyObject"],
+        "requestParameters":{"bucketName":["sample-codebuild-artifacts"],
+        "key":["${AppName}/artifact"]}}}
+      State: ENABLED
+      Description: >-
+        Amazon CloudWatch Events rule to automatically start your pipeline when
+        a change occurs in the Amazon S3 object key or S3 folder. Deleting this
+        may prevent changes from being detected in that pipeline. Read more:
+        http://docs.aws.amazon.com/codepipeline/latest/userguide/pipelines-about-starting.html
+      Targets:
+        - RoleArn: >-
+            arn:aws:iam::XXXXXXX:role/sample-cloudwatchRule-startCodePipeLine-default
+          Id: !Ref CodePipeLine
+          Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${AppName}'
+    DependsOn:
+      - CodePipeLine
